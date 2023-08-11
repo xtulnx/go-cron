@@ -16,6 +16,7 @@ type Cron struct {
 	stop      chan struct{}
 	add       chan *Entry
 	remove    chan EntryID
+	update    chan EntryID
 	snapshot  chan chan []Entry
 	running   bool
 	logger    Logger
@@ -118,6 +119,7 @@ func New(opts ...Option) *Cron {
 		stop:      make(chan struct{}),
 		snapshot:  make(chan chan []Entry),
 		remove:    make(chan EntryID),
+		update:    make(chan EntryID),
 		running:   false,
 		runningMu: sync.Mutex{},
 		logger:    DefaultLogger,
@@ -211,6 +213,15 @@ func (c *Cron) Remove(id EntryID) {
 	}
 }
 
+// Update 主动刷新时间
+func (c *Cron) Update(id EntryID) {
+	c.runningMu.Lock()
+	defer c.runningMu.Unlock()
+	if c.running {
+		c.update <- id
+	}
+}
+
 // Start the cron scheduler in its own goroutine, or no-op if already started.
 func (c *Cron) Start() {
 	c.runningMu.Lock()
@@ -297,6 +308,15 @@ func (c *Cron) run() {
 				now = c.now()
 				c.removeEntry(id)
 				c.logger.Info("removed", "entry", id)
+			case id := <-c.update:
+				timer.Stop()
+				now = c.now()
+				for _, e := range c.entries {
+					if e.ID == id {
+						e.Next = e.Schedule.Next(now)
+					}
+				}
+				c.logger.Info("update", "entry", id)
 			}
 
 			break
